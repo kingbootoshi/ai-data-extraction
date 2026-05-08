@@ -118,6 +118,8 @@ class SessionDonationWebTests(unittest.TestCase):
         self.assertIn("expanded: new Set()", web.HTML_PAGE)
         self.assertIn("state.expanded.clear()", web.HTML_PAGE)
         self.assertIn("class=\"disclosure\"", web.HTML_PAGE)
+        self.assertIn("Show sessions", web.HTML_PAGE)
+        self.assertNotIn('>${expanded ? "-" : "+"}</button>', web.HTML_PAGE)
         self.assertIn("input.indeterminate", web.HTML_PAGE)
         self.assertIn("for (const project of filteredProjects())", web.HTML_PAGE)
 

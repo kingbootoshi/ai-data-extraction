@@ -712,7 +712,7 @@ HTML_PAGE = r"""<!doctype html>
     }
     .project-head {
       display: grid;
-      grid-template-columns: auto auto minmax(0, 1fr) auto;
+      grid-template-columns: auto minmax(0, 1fr) auto auto;
       gap: 10px;
       align-items: center;
       padding: 12px 14px;
@@ -723,8 +723,24 @@ HTML_PAGE = r"""<!doctype html>
       padding: 0;
       display: inline-grid;
       place-items: center;
-      font-size: 1rem;
-      line-height: 1;
+      border-color: transparent;
+      background: transparent;
+    }
+    .disclosure:hover {
+      background: #f1f5f9;
+      border-color: var(--line);
+    }
+    .disclosure::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid var(--muted);
+      border-bottom: 2px solid var(--muted);
+      transform: rotate(-45deg);
+      transition: transform .12s ease;
+    }
+    .project.expanded .disclosure::before {
+      transform: rotate(45deg);
     }
     .project-title {
       min-width: 0;
@@ -837,7 +853,7 @@ HTML_PAGE = r"""<!doctype html>
     @media (max-width: 620px) {
       header.top, .toolbar { display: grid; }
       .controls { grid-template-columns: 1fr; }
-      .project-head { grid-template-columns: auto auto minmax(0, 1fr); }
+      .project-head { grid-template-columns: auto minmax(0, 1fr) auto; }
       .session-row { grid-template-columns: auto minmax(0, 1fr); }
       .badges { grid-column: 1 / -1; justify-content: flex-start; }
     }
@@ -1040,10 +1056,9 @@ HTML_PAGE = r"""<!doctype html>
       const expanded = state.expanded.has(project.id);
       const stats = project.stats;
       return `
-        <article class="project" data-project="${project.id}">
+        <article class="project ${expanded ? "expanded" : ""}" data-project="${project.id}">
           <div class="project-head">
             <input class="project-check" type="checkbox" data-project="${project.id}" ${allSelected ? "checked" : ""}>
-            <button class="disclosure" type="button" data-project="${project.id}" aria-label="${expanded ? "Collapse" : "Expand"} ${escapeHtml(project.name)}">${expanded ? "-" : "+"}</button>
             <div class="project-title">
               <strong>${escapeHtml(project.name)}</strong>
               <small>${escapeHtml(project.path)}</small>
@@ -1054,6 +1069,7 @@ HTML_PAGE = r"""<!doctype html>
               <span class="badge">${stats.sessions.toLocaleString()} sessions</span>
               <span class="badge">${stats.messages.toLocaleString()} messages</span>
             </div>
+            <button class="disclosure" type="button" data-project="${project.id}" aria-label="${expanded ? "Hide sessions for" : "Show sessions for"} ${escapeHtml(project.name)}" title="${expanded ? "Hide sessions" : "Show sessions"}"></button>
           </div>
           ${expanded ? `
             <div class="session-list">
