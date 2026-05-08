@@ -712,10 +712,19 @@ HTML_PAGE = r"""<!doctype html>
     }
     .project-head {
       display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-columns: auto auto minmax(0, 1fr) auto;
       gap: 10px;
       align-items: center;
       padding: 12px 14px;
+    }
+    .disclosure {
+      width: 30px;
+      height: 30px;
+      padding: 0;
+      display: inline-grid;
+      place-items: center;
+      font-size: 1rem;
+      line-height: 1;
     }
     .project-title {
       min-width: 0;
@@ -828,7 +837,8 @@ HTML_PAGE = r"""<!doctype html>
     @media (max-width: 620px) {
       header.top, .toolbar { display: grid; }
       .controls { grid-template-columns: 1fr; }
-      .project-head, .session-row { grid-template-columns: auto minmax(0, 1fr); }
+      .project-head { grid-template-columns: auto auto minmax(0, 1fr); }
+      .session-row { grid-template-columns: auto minmax(0, 1fr); }
       .badges { grid-column: 1 / -1; justify-content: flex-start; }
     }
   </style>
@@ -911,6 +921,7 @@ HTML_PAGE = r"""<!doctype html>
       projects: [],
       sessions: new Map(),
       selected: new Set(),
+      expanded: new Set(),
       lastOutputDir: null,
     };
 
@@ -957,6 +968,7 @@ HTML_PAGE = r"""<!doctype html>
       state.projects = data.projects || [];
       state.sessions.clear();
       state.selected.clear();
+      state.expanded.clear();
       for (const project of state.projects) {
         for (const session of project.sessions) {
           state.sessions.set(session.id, { ...session, projectId: project.id });
@@ -976,14 +988,18 @@ HTML_PAGE = r"""<!doctype html>
       el("excludedCount").textContent = excluded.toLocaleString();
     }
 
-    function renderProjects() {
+    function filteredProjects() {
       const q = el("search").value.trim().toLowerCase();
-      const list = el("projectList");
-      const filtered = state.projects.filter((project) => {
+      return state.projects.filter((project) => {
         if (!q) return true;
         const haystack = `${project.name} ${project.path} ${project.sessions.map((s) => s.id).join(" ")}`.toLowerCase();
         return haystack.includes(q);
       });
+    }
+
+    function renderProjects() {
+      const list = el("projectList");
+      const filtered = filteredProjects();
       if (!filtered.length) {
         list.innerHTML = '<div class="empty">No matching codebases.</div>';
         return;
@@ -1000,6 +1016,14 @@ HTML_PAGE = r"""<!doctype html>
           updateSelection();
         });
       });
+      list.querySelectorAll(".disclosure").forEach((button) => {
+        button.addEventListener("click", () => {
+          const projectId = button.dataset.project;
+          if (state.expanded.has(projectId)) state.expanded.delete(projectId);
+          else state.expanded.add(projectId);
+          renderProjects();
+        });
+      });
       list.querySelectorAll(".session-check").forEach((input) => {
         input.addEventListener("change", () => {
           if (input.checked) state.selected.add(input.dataset.session);
@@ -1008,15 +1032,18 @@ HTML_PAGE = r"""<!doctype html>
           updateSelection();
         });
       });
+      updateProjectChecks();
     }
 
     function projectHtml(project) {
       const allSelected = project.sessions.every((session) => state.selected.has(session.id));
+      const expanded = state.expanded.has(project.id);
       const stats = project.stats;
       return `
         <article class="project" data-project="${project.id}">
           <div class="project-head">
             <input class="project-check" type="checkbox" data-project="${project.id}" ${allSelected ? "checked" : ""}>
+            <button class="disclosure" type="button" data-project="${project.id}" aria-label="${expanded ? "Collapse" : "Expand"} ${escapeHtml(project.name)}">${expanded ? "-" : "+"}</button>
             <div class="project-title">
               <strong>${escapeHtml(project.name)}</strong>
               <small>${escapeHtml(project.path)}</small>
@@ -1028,10 +1055,12 @@ HTML_PAGE = r"""<!doctype html>
               <span class="badge">${stats.messages.toLocaleString()} messages</span>
             </div>
           </div>
-          <div class="session-list">
-            ${project.sessions.slice(0, 20).map((session) => sessionHtml(session)).join("")}
-            ${project.sessions.length > 20 ? `<div class="session-main">${project.sessions.length - 20} more sessions included when selected.</div>` : ""}
-          </div>
+          ${expanded ? `
+            <div class="session-list">
+              ${project.sessions.slice(0, 20).map((session) => sessionHtml(session)).join("")}
+              ${project.sessions.length > 20 ? `<div class="session-main">${project.sessions.length - 20} more sessions included when selected.</div>` : ""}
+            </div>
+          ` : ""}
         </article>
       `;
     }
@@ -1053,7 +1082,9 @@ HTML_PAGE = r"""<!doctype html>
     function updateProjectChecks() {
       document.querySelectorAll(".project-check").forEach((input) => {
         const project = state.projects.find((item) => item.id === input.dataset.project);
-        input.checked = project.sessions.every((session) => state.selected.has(session.id));
+        const selectedCount = project.sessions.filter((session) => state.selected.has(session.id)).length;
+        input.checked = selectedCount === project.sessions.length;
+        input.indeterminate = selectedCount > 0 && selectedCount < project.sessions.length;
       });
     }
 
@@ -1136,7 +1167,11 @@ HTML_PAGE = r"""<!doctype html>
     el("sources").addEventListener("change", () => scan(true).catch((err) => setStatus(err.message, "error")));
     el("search").addEventListener("input", renderProjects);
     el("selectVisible").addEventListener("click", () => {
-      document.querySelectorAll(".session-check").forEach((input) => state.selected.add(input.dataset.session));
+      for (const project of filteredProjects()) {
+        for (const session of project.sessions) {
+          state.selected.add(session.id);
+        }
+      }
       renderProjects();
       updateSelection();
     });

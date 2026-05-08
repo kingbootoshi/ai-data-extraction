@@ -114,6 +114,13 @@ class SessionDonationWebTests(unittest.TestCase):
         self.assertNotIn("Progress", web.HTML_PAGE)
         self.assertNotIn("progressBar", web.HTML_PAGE)
 
+    def test_web_ui_collapses_projects_by_default_for_project_level_selection(self) -> None:
+        self.assertIn("expanded: new Set()", web.HTML_PAGE)
+        self.assertIn("state.expanded.clear()", web.HTML_PAGE)
+        self.assertIn("class=\"disclosure\"", web.HTML_PAGE)
+        self.assertIn("input.indeterminate", web.HTML_PAGE)
+        self.assertIn("for (const project of filteredProjects())", web.HTML_PAGE)
+
     def test_package_selected_sessions_creates_zip_and_verifies_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

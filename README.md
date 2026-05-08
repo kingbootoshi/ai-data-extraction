@@ -212,7 +212,8 @@ http://127.0.0.1:8765
 The UI shows:
 
 - codebases inferred from recorded Codex/Claude `cwd` values;
-- sessions under each codebase;
+- collapsed codebase rows by default, where selecting a codebase includes all of its sessions;
+- expandable session lists for selecting only specific sessions inside a codebase;
 - largest estimated-token codebases and sessions first;
 - estimated tokens per project/session using `ceil(characters / 4)`;
 - selected donation totals in K/M/B/T units;
