@@ -50,8 +50,8 @@ SECRET_PATTERNS = [
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bhf_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\b[A-Za-z0-9_]*API[_-]?KEY[A-Za-z0-9_]*\s*[:=]\s*['\"]?[^'\"\s,}]+", re.IGNORECASE),
-    re.compile(r"\b[A-Za-z0-9_]*TOKEN[A-Za-z0-9_]*\s*[:=]\s*['\"]?[^'\"\s,}]+", re.IGNORECASE),
+    re.compile(r"\b[A-Za-z0-9_]*API[_-]?KEY[A-Za-z0-9_]*\s*[:=]\s*['\"]?[^'\"\s,}]+['\"]?", re.IGNORECASE),
+    re.compile(r"\b[A-Za-z0-9_]*TOKEN[A-Za-z0-9_]*\s*[:=]\s*['\"]?[^'\"\s,}]+['\"]?", re.IGNORECASE),
 ]
 LOCAL_PATH_PATTERN = re.compile(r"(?<![\w<])/(?:Users|private|tmp|var|home)/[^\s'\"),:\]}]+")
 

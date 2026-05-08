@@ -34,6 +34,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 TOKEN_CHAR_RATIO = 4
 SCAN_CACHE_TTL_SECONDS = 300
+MAX_PREVIEW_CHARACTERS = 20_000
 
 
 @dataclass
@@ -452,6 +453,34 @@ def package_selected_sessions(
     }
 
 
+def preview_filter_text(
+    text: str,
+    project_path: str | None,
+    privacy_filter_command: str | None,
+) -> dict[str, Any]:
+    if not text.strip():
+        raise ValueError("Enter text to preview.")
+    if len(text) > MAX_PREVIEW_CHARACTERS:
+        raise ValueError(f"Preview text must be {MAX_PREVIEW_CHARACTERS:,} characters or less.")
+
+    project_root = donation.canonical_path(Path(project_path or Path.cwd()))
+    minimizer = donation.LocalMinimizer(project_root)
+    minimized, replacements = minimizer.apply(text)
+    filtered = donation.PrivacyFilter(privacy_filter_command).filter_text(minimized)
+
+    return {
+        "project_path": str(project_root),
+        "input_characters": len(text),
+        "minimized_text": minimized,
+        "redacted_text": filtered.redacted_text,
+        "local_replacements": replacements,
+        "privacy_spans": filtered.spans,
+        "span_count": filtered.span_count,
+        "runner": filtered.runner,
+        "model": donation.PRIVACY_FILTER_MODEL,
+    }
+
+
 def verify_output_dir(output_dir: str) -> dict[str, Any]:
     buffer = io.StringIO()
     args = argparse.Namespace(output_dir=output_dir)
@@ -572,6 +601,19 @@ class DonationWebHandler(BaseHTTPRequestHandler):
                 json_response(self, {"ok": False, "error": str(exc)}, status=400)
             return
 
+        if parsed.path == "/api/preview-filter":
+            try:
+                payload = read_request_json(self)
+                result = preview_filter_text(
+                    text=str(payload.get("text", "")),
+                    project_path=payload.get("project_path") or None,
+                    privacy_filter_command=payload.get("privacy_filter_command") or None,
+                )
+                json_response(self, {"ok": True, **result})
+            except Exception as exc:
+                json_response(self, {"ok": False, "error": str(exc)}, status=400)
+            return
+
         text_response(self, "Not found", status=404, content_type="text/plain")
 
 
@@ -654,7 +696,7 @@ HTML_PAGE = r"""<!doctype html>
       font-size: .82rem;
       font-weight: 650;
     }
-    input[type="text"], input[type="search"] {
+    input[type="text"], input[type="search"], textarea {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -662,6 +704,11 @@ HTML_PAGE = r"""<!doctype html>
       color: var(--ink);
       background: #fff;
       font: inherit;
+    }
+    textarea {
+      min-height: 118px;
+      resize: vertical;
+      line-height: 1.45;
     }
     .checkline {
       display: flex;
@@ -839,6 +886,41 @@ HTML_PAGE = r"""<!doctype html>
       gap: 7px;
       margin-top: 8px;
     }
+    .preview-panel {
+      display: grid;
+      gap: 8px;
+    }
+    .preview-output {
+      display: grid;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .preview-block {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      padding: 9px;
+    }
+    .preview-block span {
+      display: block;
+      color: var(--muted);
+      font-size: .76rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .preview-block pre {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .78rem;
+      line-height: 1.42;
+    }
+    .preview-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
     a { color: var(--accent-dark); font-weight: 650; }
     .empty {
       padding: 30px 14px;
@@ -925,6 +1007,13 @@ HTML_PAGE = r"""<!doctype html>
           <button id="package" class="primary">Package selected data</button>
           <button id="verify" disabled>Verify last package</button>
           <div id="packageLinks" class="links"></div>
+        </section>
+
+        <section class="panel preview-panel">
+          <strong>Privacy preview</strong>
+          <textarea id="previewInput" spellcheck="false">Alice shared OPENAI_API_KEY="sk-demo1234567890abcdef" from /Users/saint/Dev/ai-data-extraction/.env and alice@example.com.</textarea>
+          <button id="previewFilter">Run preview</button>
+          <div id="previewOutput" class="preview-output" hidden></div>
         </section>
 
         <section id="status" class="status">Ready.</section>
@@ -1133,6 +1222,73 @@ HTML_PAGE = r"""<!doctype html>
       }[char]));
     }
 
+    function firstSelectedProjectPath() {
+      for (const sessionId of state.selected) {
+        const session = state.sessions.get(sessionId);
+        const project = state.projects.find((item) => item.id === session?.projectId);
+        if (project?.path) return project.path;
+      }
+      return "";
+    }
+
+    function localReplacementCount(replacements) {
+      return Object.values(replacements || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+    }
+
+    function renderPreview(data) {
+      const spanLabels = (data.privacy_spans || []).map((span) => {
+        const label = span.label || span.entity_group || "privacy";
+        const score = typeof span.score === "number" ? ` ${(span.score * 100).toFixed(1)}%` : "";
+        return `<span class="badge">${escapeHtml(label)}${score}</span>`;
+      }).join("");
+      el("previewOutput").hidden = false;
+      el("previewOutput").innerHTML = `
+        <div class="preview-block">
+          <span>After local minimization</span>
+          <pre>${escapeHtml(data.minimized_text)}</pre>
+        </div>
+        <div class="preview-block">
+          <span>After privacy filter</span>
+          <pre>${escapeHtml(data.redacted_text)}</pre>
+        </div>
+        <div class="preview-tags">
+          <span class="badge">${Number(data.span_count || 0).toLocaleString()} privacy spans</span>
+          <span class="badge">${localReplacementCount(data.local_replacements).toLocaleString()} local replacements</span>
+          ${spanLabels}
+        </div>
+      `;
+    }
+
+    async function previewFilter() {
+      const text = el("previewInput").value;
+      if (!text.trim()) {
+        setStatus("Enter text to preview.", "error");
+        return;
+      }
+      setStatus("Running privacy preview...");
+      el("previewFilter").disabled = true;
+      const res = await fetch("/api/preview-filter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          project_path: firstSelectedProjectPath(),
+          privacy_filter_command: el("filterCommand").value,
+        }),
+      });
+      const data = await res.json();
+      el("previewFilter").disabled = false;
+      if (!data.ok) {
+        setStatus(data.error || "Privacy preview failed", "error");
+        return;
+      }
+      renderPreview(data);
+      setStatus(
+        `Privacy preview complete. ${Number(data.span_count || 0).toLocaleString()} privacy spans, ${localReplacementCount(data.local_replacements).toLocaleString()} local replacements.`,
+        "success",
+      );
+    }
+
     async function packageSelected() {
       setStatus("Packaging selected sessions through the privacy filter...");
       el("package").disabled = true;
@@ -1196,6 +1352,7 @@ HTML_PAGE = r"""<!doctype html>
       renderProjects();
       updateSelection();
     });
+    el("previewFilter").addEventListener("click", previewFilter);
     el("package").addEventListener("click", packageSelected);
     el("verify").addEventListener("click", verifyLast);
 

@@ -123,6 +123,28 @@ class SessionDonationWebTests(unittest.TestCase):
         self.assertIn("input.indeterminate", web.HTML_PAGE)
         self.assertIn("for (const project of filteredProjects())", web.HTML_PAGE)
 
+    def test_preview_filter_uses_local_minimizer_and_privacy_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            filter_command = make_fake_privacy_filter(root)
+
+            result = web.preview_filter_text(
+                text=f"Alice set OPENAI_API_KEY=demo-secret at {project}/.env and emailed alice@example.com.",
+                project_path=str(project),
+                privacy_filter_command=filter_command,
+            )
+
+            self.assertIn("<PROJECT>", result["minimized_text"])
+            self.assertIn("<SECRET>", result["minimized_text"])
+            self.assertIn("<PRIVATE_PERSON>", result["redacted_text"])
+            self.assertIn("<PRIVATE_EMAIL>", result["redacted_text"])
+            self.assertNotIn(str(project), result["redacted_text"])
+            self.assertEqual(result["span_count"], 2)
+            self.assertEqual(result["local_replacements"]["project_paths"], 1)
+            self.assertEqual(result["local_replacements"]["secret_patterns"], 1)
+
     def test_package_selected_sessions_creates_zip_and_verifies_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
