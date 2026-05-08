@@ -1,5 +1,6 @@
 # Exclude extracted data (user's private conversations)
 extracted_data/
+donation_exports/
 
 # Python cache
 __pycache__/

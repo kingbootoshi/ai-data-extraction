@@ -130,6 +130,57 @@ python3 extract_opencode.py
 ./extract_all.sh
 ```
 
+## 🔒 Project-Scoped Session Donation
+
+This fork adds a safer donation workflow for Codex and Claude Code sessions:
+
+- only sessions whose recorded `cwd` values stay inside one selected project are eligible;
+- global history, session indexes, system prompts, and raw local source paths are not included in shareable donation records;
+- every exported message is minimized locally and then passed through OpenAI Privacy Filter (`openai/privacy-filter`);
+- a redacted `review.html` and `manifest.json` are generated so users can verify what they are sharing.
+
+Install OpenAI Privacy Filter first:
+
+```bash
+git clone https://github.com/openai/privacy-filter
+cd privacy-filter
+uv venv
+uv pip install -e .
+```
+
+Then export sessions for one project:
+
+```bash
+# Preview eligible/excluded sessions without exporting content
+uv run python donate_project_sessions.py export --project /path/to/project --list
+
+# Export all eligible sessions after privacy filtering
+uv run python donate_project_sessions.py export --project /path/to/project --yes
+
+# Verify the generated donation bundle
+uv run python donate_project_sessions.py verify donation_exports/project_YYYYMMDD_HHMMSS
+```
+
+If `opf` is not on your PATH, pass the venv command explicitly:
+
+```bash
+uv run python donate_project_sessions.py export \
+  --project /path/to/project \
+  --privacy-filter-command "/path/to/privacy-filter/.venv/bin/opf --output-mode typed" \
+  --yes
+```
+
+Outputs:
+
+```text
+donation_exports/<project>_<timestamp>/
+├── donation.jsonl   # shareable, privacy-filtered records
+├── manifest.json    # shareable counts, hashes, filter metadata
+└── review.html      # local redacted review UI
+```
+
+Research and storage assumptions are documented in `docs/session-donation-research.md`.
+
 ### Output
 
 All scripts create an `extracted_data/` directory with timestamped JSONL files:
