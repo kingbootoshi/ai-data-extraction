@@ -21,6 +21,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,9 @@ DEFAULT_OUTPUT_ROOT = "donation_exports"
 SHAREABLE_DONATION_FILE = "donation.jsonl"
 SHAREABLE_MANIFEST_FILE = "manifest.json"
 REVIEW_FILE = "review.html"
+DEFAULT_PRIVACY_FILTER_COMMAND = (
+    "opf --device cpu --output-mode typed --format json --json-indent 0 --no-print-color-coded-text"
+)
 
 
 SECRET_PATTERNS = [
@@ -42,6 +46,7 @@ SECRET_PATTERNS = [
     re.compile(r"\b[A-Za-z0-9_]*API[_-]?KEY[A-Za-z0-9_]*\s*[:=]\s*['\"]?[^'\"\s,}]+", re.IGNORECASE),
     re.compile(r"\b[A-Za-z0-9_]*TOKEN[A-Za-z0-9_]*\s*[:=]\s*['\"]?[^'\"\s,}]+", re.IGNORECASE),
 ]
+LOCAL_PATH_PATTERN = re.compile(r"(?<![\w<])/(?:Users|private|tmp|var|home)/[^\s'\"),:\]}]+")
 
 
 @dataclass
@@ -502,8 +507,7 @@ class LocalMinimizer:
             minimized, count = re.subn(home_pattern + r"(?=/|[\s'\"),:\]}]|$)", "<HOME>", minimized)
             counts["home_paths"] += count
 
-        absolute_path_pattern = re.compile(r"(?<![\w<])/(?:Users|private|tmp|var|home)/[^\s'\"),:\]}]+")
-        minimized, count = absolute_path_pattern.subn("<LOCAL_PATH>", minimized)
+        minimized, count = LOCAL_PATH_PATTERN.subn("<LOCAL_PATH>", minimized)
         counts["absolute_paths"] += count
 
         for pattern in SECRET_PATTERNS:
@@ -525,7 +529,7 @@ def path_aliases(path: Path) -> list[str]:
 
 class PrivacyFilter:
     def __init__(self, command: str | None = None):
-        self.command = command or "opf --output-mode typed"
+        self.command = command or DEFAULT_PRIVACY_FILTER_COMMAND
         self.command_parts = shlex.split(self.command)
         if not self.command_parts:
             raise PrivacyFilterError("privacy filter command is empty")
@@ -533,6 +537,10 @@ class PrivacyFilter:
     @property
     def runner(self) -> str:
         return Path(self.command_parts[0]).name
+
+    @property
+    def uses_opf_cli(self) -> bool:
+        return self.runner == "opf"
 
     def ensure_available(self) -> None:
         executable = self.command_parts[0]
@@ -547,14 +555,28 @@ class PrivacyFilter:
         if not text:
             return TextFilterResult(redacted_text=text, spans=[], span_count=0, runner=self.runner)
 
-        proc = subprocess.run(
-            self.command_parts,
-            input=text,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
+        input_text: str | None = text
+        command_parts = self.command_parts
+        temp_path: str | None = None
+        if self.uses_opf_cli:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as temp_file:
+                temp_file.write(text)
+                temp_path = temp_file.name
+            command_parts = [*self.command_parts, "--text-file", temp_path]
+            input_text = None
+
+        try:
+            proc = subprocess.run(
+                command_parts,
+                input=input_text,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        finally:
+            if temp_path:
+                Path(temp_path).unlink(missing_ok=True)
         if proc.returncode != 0:
             raise PrivacyFilterError(
                 f"privacy filter command failed with exit code {proc.returncode}: {proc.stderr.strip()}"
@@ -1206,6 +1228,8 @@ def command_verify(args: argparse.Namespace) -> int:
         checked_text = checked_path.read_text(encoding="utf-8")
         if home_path in checked_text:
             failures.append(f"{checked_path.name} contains the user's home directory path")
+        if LOCAL_PATH_PATTERN.search(checked_text):
+            failures.append(f"{checked_path.name} contains an unminimized local filesystem path")
 
     if failures:
         for failure in failures:
@@ -1231,7 +1255,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument(
         "--privacy-filter-command",
         default=None,
-        help="command compatible with `opf --output-mode typed`; defaults to `opf --output-mode typed`",
+        help=f"command compatible with OPF JSON output; defaults to `{DEFAULT_PRIVACY_FILTER_COMMAND}`",
     )
     export_parser.add_argument("--include-tools", action="store_true", help="include filtered tool call/result payloads")
     export_parser.add_argument("--session", action="append", help="eligible session hash to include; repeatable")

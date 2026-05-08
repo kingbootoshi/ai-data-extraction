@@ -53,7 +53,7 @@ OpenAI Privacy Filter is a Hugging Face token-classification model for privacy s
 The exporter requires an OpenAI Privacy Filter compatible command before it writes donation data. By default it calls:
 
 ```bash
-opf --output-mode typed
+opf --device cpu --output-mode typed --format json --json-indent 0 --no-print-color-coded-text
 ```
 
 The command must emit JSON with `redacted_text` and optional `detected_spans`, matching the documented OPF output shape. The exporter strips raw span text from saved metadata and keeps only labels, offsets, placeholders, and scores.
@@ -74,4 +74,3 @@ Related sources:
 - Donation output is refused if the privacy filter command is missing or fails.
 - A manifest and review HTML are generated so users can inspect exactly what would be shared.
 - The verifier checks the donation hash, record count, and per-message privacy-filter metadata.
-

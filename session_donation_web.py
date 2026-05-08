@@ -849,7 +849,7 @@ HTML_PAGE = r"""<!doctype html>
           <input id="sources" type="text" value="codex,claude">
         </label>
         <label>Privacy filter command
-          <input id="filterCommand" type="text" value="opf --output-mode typed">
+          <input id="filterCommand" type="text" value="opf --device cpu --output-mode typed --format json --json-indent 0 --no-print-color-coded-text">
         </label>
         <label class="checkline">
           <input id="includeTools" type="checkbox"> Include tool payloads

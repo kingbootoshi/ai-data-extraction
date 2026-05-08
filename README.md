@@ -139,6 +139,10 @@ This fork adds a safer donation workflow for Codex and Claude Code sessions:
 - every exported message is minimized locally and then passed through OpenAI Privacy Filter (`openai/privacy-filter`);
 - a redacted `review.html` and `manifest.json` are generated so users can verify what they are sharing.
 
+Privacy filtering is a review aid, not a guarantee that every personal name,
+secret, or sensitive detail was removed. Inspect `review.html` before sharing
+the zip.
+
 Install OpenAI Privacy Filter first:
 
 ```bash
@@ -166,7 +170,7 @@ If `opf` is not on your PATH, pass the venv command explicitly:
 ```bash
 uv run python donate_project_sessions.py export \
   --project /path/to/project \
-  --privacy-filter-command "/path/to/privacy-filter/.venv/bin/opf --output-mode typed" \
+  --privacy-filter-command "/path/to/privacy-filter/.venv/bin/opf --device cpu --output-mode typed --format json --json-indent 0 --no-print-color-coded-text" \
   --yes
 ```
 
@@ -188,6 +192,16 @@ You can also use the local browser UI to pick whole codebases or individual sess
 ```bash
 uv run python session_donation_web.py --host 127.0.0.1 --port 8765
 ```
+
+If OPF is installed in a separate venv and `opf` is not already on your PATH,
+start the server with that venv first:
+
+```bash
+PATH=/path/to/privacy-filter/.venv/bin:$PATH uv run python session_donation_web.py --host 127.0.0.1 --port 8765
+```
+
+You can also paste the full venv command into the UI's privacy filter command
+field.
 
 Open:
 

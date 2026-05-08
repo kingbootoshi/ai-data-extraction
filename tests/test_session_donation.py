@@ -42,6 +42,7 @@ def make_fake_privacy_filter(root: Path) -> str:
                         "label": label,
                         "start": match.start(),
                         "end": match.end(),
+                        "text": needle,
                         "placeholder": replacement,
                     })
                 redacted = redacted.replace(needle, replacement)
@@ -62,6 +63,37 @@ def make_fake_privacy_filter(root: Path) -> str:
 
 
 class SessionDonationTests(unittest.TestCase):
+    def test_opf_cli_uses_text_file_for_multiline_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            opf = root / "opf"
+            opf.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import sys
+                    from pathlib import Path
+
+                    text_file = sys.argv[sys.argv.index("--text-file") + 1]
+                    text = Path(text_file).read_text(encoding="utf-8")
+                    print(json.dumps({
+                        "schema_version": 1,
+                        "summary": {"span_count": 0},
+                        "text": text,
+                        "detected_spans": [],
+                        "redacted_text": text.replace("Alice", "<PRIVATE_PERSON>"),
+                    }, indent=0))
+                    """
+                ),
+                encoding="utf-8",
+            )
+            opf.chmod(opf.stat().st_mode | stat.S_IXUSR)
+
+            result = donation.PrivacyFilter(str(opf)).filter_text("hello Alice\nsecond line")
+
+            self.assertEqual(result.redacted_text, "hello <PRIVATE_PERSON>\nsecond line")
+
     def test_codex_discovery_only_marks_project_scoped_sessions_eligible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -245,6 +277,43 @@ class SessionDonationTests(unittest.TestCase):
 
             verify_code = donation.command_verify(argparse.Namespace(output_dir=str(output_dir)))
             self.assertEqual(verify_code, 0)
+
+    def test_verify_rejects_unminimized_local_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            donation_path = output_dir / donation.SHAREABLE_DONATION_FILE
+            manifest_path = output_dir / donation.SHAREABLE_MANIFEST_FILE
+            review_path = output_dir / donation.REVIEW_FILE
+            record = {
+                "schema_version": donation.SCHEMA_VERSION,
+                "source": "codex",
+                "session_hash": "session",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "see /Users/example/project/file.py",
+                        "privacy_filter": {
+                            "model": donation.PRIVACY_FILTER_MODEL,
+                            "status": "filtered",
+                        },
+                    }
+                ],
+                "privacy_filter": {
+                    "model": donation.PRIVACY_FILTER_MODEL,
+                    "status": "filtered",
+                },
+            }
+            donation_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            manifest = {
+                "counts": {"donated": 1},
+                "files": {"donation_sha256": donation.file_sha256(donation_path)},
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            review_path.write_text("review", encoding="utf-8")
+
+            verify_code = donation.command_verify(argparse.Namespace(output_dir=str(output_dir)))
+
+            self.assertEqual(verify_code, 1)
 
 
 if __name__ == "__main__":
