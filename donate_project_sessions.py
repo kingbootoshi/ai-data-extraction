@@ -37,6 +37,13 @@ REVIEW_FILE = "review.html"
 DEFAULT_PRIVACY_FILTER_COMMAND = (
     "opf --device cpu --output-mode typed --format json --json-indent 0 --no-print-color-coded-text"
 )
+OPF_DEFAULT_ARGS = [
+    ("--device", "cpu"),
+    ("--output-mode", "typed"),
+    ("--format", "json"),
+    ("--json-indent", "0"),
+]
+OPF_DEFAULT_FLAGS = ["--no-print-color-coded-text"]
 
 
 SECRET_PATTERNS = [
@@ -527,12 +534,31 @@ def path_aliases(path: Path) -> list[str]:
     return dedupe_keep_order(aliases)
 
 
+def command_has_option(parts: list[str], option: str) -> bool:
+    return option in parts or any(part.startswith(f"{option}=") for part in parts)
+
+
+def normalize_opf_command_parts(parts: list[str]) -> list[str]:
+    if not parts or Path(parts[0]).name != "opf":
+        return parts
+
+    normalized = list(parts)
+    for option, value in OPF_DEFAULT_ARGS:
+        if not command_has_option(normalized, option):
+            normalized.extend([option, value])
+    for flag in OPF_DEFAULT_FLAGS:
+        if flag not in normalized:
+            normalized.append(flag)
+    return normalized
+
+
 class PrivacyFilter:
     def __init__(self, command: str | None = None):
         self.command = command or DEFAULT_PRIVACY_FILTER_COMMAND
         self.command_parts = shlex.split(self.command)
         if not self.command_parts:
             raise PrivacyFilterError("privacy filter command is empty")
+        self.command_parts = normalize_opf_command_parts(self.command_parts)
 
     @property
     def runner(self) -> str:

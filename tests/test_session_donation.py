@@ -94,6 +94,44 @@ class SessionDonationTests(unittest.TestCase):
 
             self.assertEqual(result.redacted_text, "hello <PRIVATE_PERSON>\nsecond line")
 
+    def test_opf_cli_command_is_normalized_to_cpu_json_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            argv_path = root / "argv.json"
+            opf = root / "opf"
+            opf.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env python3
+                    import json
+                    import sys
+
+                    with open({str(argv_path)!r}, "w", encoding="utf-8") as f:
+                        json.dump(sys.argv[1:], f)
+                    print(json.dumps({{
+                        "schema_version": 1,
+                        "summary": {{"span_count": 0}},
+                        "text": "ok",
+                        "detected_spans": [],
+                        "redacted_text": "ok",
+                    }}))
+                    """
+                ),
+                encoding="utf-8",
+            )
+            opf.chmod(opf.stat().st_mode | stat.S_IXUSR)
+
+            donation.PrivacyFilter(f"{opf} --output-mode typed").filter_text("hello")
+
+            argv = json.loads(argv_path.read_text(encoding="utf-8"))
+            self.assertIn("--device", argv)
+            self.assertEqual(argv[argv.index("--device") + 1], "cpu")
+            self.assertIn("--format", argv)
+            self.assertEqual(argv[argv.index("--format") + 1], "json")
+            self.assertIn("--json-indent", argv)
+            self.assertEqual(argv[argv.index("--json-indent") + 1], "0")
+            self.assertIn("--no-print-color-coded-text", argv)
+
     def test_codex_discovery_only_marks_project_scoped_sessions_eligible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
