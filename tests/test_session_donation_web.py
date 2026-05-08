@@ -45,6 +45,69 @@ class SessionDonationWebTests(unittest.TestCase):
             self.assertEqual(public["totals"]["estimated_tokens"], 10)
             self.assertEqual(public["projects"][0]["path"], str(donation.canonical_path(project)))
 
+    def test_public_index_sorts_projects_and_sessions_by_estimated_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            big_project = root / "z-big"
+            small_project = root / "a-small"
+            (big_project / ".git").mkdir(parents=True)
+            (small_project / ".git").mkdir(parents=True)
+            codex_home = root / "codex"
+
+            write_jsonl(
+                codex_home / "sessions/2026/05/08/rollout-big-small.jsonl",
+                [
+                    {
+                        "type": "session_meta",
+                        "timestamp": "2026-05-08T12:00:00Z",
+                        "payload": {"id": "big-small", "cwd": str(big_project)},
+                    },
+                    {
+                        "type": "response_item",
+                        "timestamp": "2026-05-08T12:00:01Z",
+                        "payload": {"type": "message", "role": "user", "content": "x" * 40},
+                    },
+                ],
+            )
+            write_jsonl(
+                codex_home / "sessions/2026/05/08/rollout-big-large.jsonl",
+                [
+                    {
+                        "type": "session_meta",
+                        "timestamp": "2026-05-08T10:00:00Z",
+                        "payload": {"id": "big-large", "cwd": str(big_project)},
+                    },
+                    {
+                        "type": "response_item",
+                        "timestamp": "2026-05-08T10:00:01Z",
+                        "payload": {"type": "message", "role": "user", "content": "x" * 400},
+                    },
+                ],
+            )
+            write_jsonl(
+                codex_home / "sessions/2026/05/08/rollout-small-project.jsonl",
+                [
+                    {
+                        "type": "session_meta",
+                        "timestamp": "2026-05-08T11:00:00Z",
+                        "payload": {"id": "small-project", "cwd": str(small_project)},
+                    },
+                    {
+                        "type": "response_item",
+                        "timestamp": "2026-05-08T11:00:01Z",
+                        "payload": {"type": "message", "role": "user", "content": "x" * 80},
+                    },
+                ],
+            )
+
+            with patch.dict(os.environ, {"CODEX_HOME": str(codex_home), "CLAUDE_CONFIG_DIR": str(root / "empty")}):
+                public = web.public_index(web.build_project_index({"codex"}, include_tools=False))
+
+            self.assertEqual(public["projects"][0]["path"], str(donation.canonical_path(big_project)))
+            self.assertEqual(public["projects"][1]["path"], str(donation.canonical_path(small_project)))
+            session_tokens = [session["stats"]["estimated_tokens"] for session in public["projects"][0]["sessions"]]
+            self.assertEqual(session_tokens, [100, 10])
+
     def test_web_ui_shows_selected_donation_without_collector_progress(self) -> None:
         self.assertIn("Selected donation", web.HTML_PAGE)
         self.assertNotIn('id="target"', web.HTML_PAGE)

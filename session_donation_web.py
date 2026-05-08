@@ -213,12 +213,26 @@ def build_project_index(sources: set[str], include_tools: bool) -> dict[str, Any
     projects = []
     for project in projects_by_root.values():
         project_sessions = [session_payload(session_id, sessions[session_id]) for session_id in project["sessions"]]
-        project_sessions.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+        project_sessions.sort(
+            key=lambda item: (
+                item["stats"].get("estimated_tokens", 0),
+                item["stats"].get("bytes", 0),
+                item.get("updated_at") or "",
+            ),
+            reverse=True,
+        )
         project["sessions"] = project_sessions
         project["sources"] = sorted(project["sources"])
         projects.append(project)
 
-    projects.sort(key=lambda project: project["stats"]["estimated_tokens"], reverse=True)
+    projects.sort(
+        key=lambda project: (
+            project["stats"].get("estimated_tokens", 0),
+            project["stats"].get("bytes", 0),
+            project["stats"].get("sessions", 0),
+        ),
+        reverse=True,
+    )
 
     return {
         "scanned_at": donation.utc_now_iso(),

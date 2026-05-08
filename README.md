@@ -199,6 +199,7 @@ The UI shows:
 
 - codebases inferred from recorded Codex/Claude `cwd` values;
 - sessions under each codebase;
+- largest estimated-token codebases and sessions first;
 - estimated tokens per project/session using `ceil(characters / 4)`;
 - selected donation totals in K/M/B/T units;
 - exact bytes, characters, sessions, and message counts;
