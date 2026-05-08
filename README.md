@@ -181,6 +181,30 @@ donation_exports/<project>_<timestamp>/
 
 Research and storage assumptions are documented in `docs/session-donation-research.md`.
 
+### Local Web UI
+
+You can also use the local browser UI to pick whole codebases or individual sessions and see the estimated donation volume before packaging:
+
+```bash
+uv run python session_donation_web.py --host 127.0.0.1 --port 8765
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+The UI shows:
+
+- codebases inferred from recorded Codex/Claude `cwd` values;
+- sessions under each codebase;
+- estimated tokens per project/session using `ceil(characters / 4)`;
+- selected donation totals in K/M/B/T units;
+- exact bytes, characters, sessions, and message counts;
+- package links for `donation.jsonl`, `manifest.json`, `review.html`, and a zip archive;
+- a verify button that runs the same local verifier as the CLI.
+
 ### Output
 
 All scripts create an `extracted_data/` directory with timestamped JSONL files:
