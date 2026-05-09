@@ -101,6 +101,18 @@ def redact_text(text: str, spans: list[dict[str, Any]]) -> str:
     return "".join(pieces)
 
 
+def clear_mlx_cache() -> None:
+    try:
+        import mlx.core as mx
+    except ImportError:
+        return
+
+    try:
+        mx.clear_cache()
+    except Exception:
+        return
+
+
 class OpenMedMLXFilter:
     def __init__(self, model_name: str = DEFAULT_OPENMED_MLX_MODEL):
         try:
@@ -115,7 +127,10 @@ class OpenMedMLXFilter:
         self.pipeline = create_mlx_pipeline(model_path)
 
     def filter_text(self, text: str) -> dict[str, Any]:
-        spans = normalize_entities(self.pipeline(text))
+        try:
+            spans = normalize_entities(self.pipeline(text))
+        finally:
+            clear_mlx_cache()
         redacted = redact_text(text, spans)
         return {
             "schema_version": 1,

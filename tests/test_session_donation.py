@@ -172,6 +172,38 @@ class SessionDonationTests(unittest.TestCase):
         self.assertEqual(spans[0]["placeholder"], "<PRIVATE_PERSON>")
         self.assertNotIn("word", spans[0])
 
+    def test_local_minimizer_redacts_quoted_secret_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            minimizer = donation.LocalMinimizer(Path(tmp))
+            text = (
+                '{"githubToken": "ghp_example", "telegramToken": "123456:ABC", '
+                '"apiKey": "sk-demo", "openrouterKey": "sk-or-demo"}'
+            )
+
+            minimized, counts = minimizer.apply(text)
+
+        self.assertEqual(counts["secret_patterns"], 4)
+        self.assertEqual(minimized.count("<SECRET>"), 4)
+        self.assertNotIn("ghp_example", minimized)
+        self.assertNotIn("123456:ABC", minimized)
+        self.assertNotIn("sk-demo", minimized)
+        self.assertNotIn("sk-or-demo", minimized)
+
+    def test_local_minimizer_redacts_git_remotes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            minimizer = donation.LocalMinimizer(Path(tmp))
+            text = (
+                '"githubRemote": "git@github.com:user/repo.git", '
+                '"origin": "https://github.com/user/repo.git"'
+            )
+
+            minimized, counts = minimizer.apply(text)
+
+        self.assertEqual(counts["git_remotes"], 2)
+        self.assertEqual(minimized.count("<GIT_REMOTE>"), 2)
+        self.assertNotIn("git@github.com", minimized)
+        self.assertNotIn("https://github.com/user/repo.git", minimized)
+
     def test_codex_discovery_only_marks_project_scoped_sessions_eligible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -370,6 +402,43 @@ class SessionDonationTests(unittest.TestCase):
                     {
                         "role": "user",
                         "content": "see /Users/example/project/file.py",
+                        "privacy_filter": {
+                            "model": donation.PRIVACY_FILTER_MODEL,
+                            "status": "filtered",
+                        },
+                    }
+                ],
+                "privacy_filter": {
+                    "model": donation.PRIVACY_FILTER_MODEL,
+                    "status": "filtered",
+                },
+            }
+            donation_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            manifest = {
+                "counts": {"donated": 1},
+                "files": {"donation_sha256": donation.file_sha256(donation_path)},
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            review_path.write_text("review", encoding="utf-8")
+
+            verify_code = donation.command_verify(argparse.Namespace(output_dir=str(output_dir)))
+
+            self.assertEqual(verify_code, 1)
+
+    def test_verify_rejects_unminimized_secrets_and_git_remotes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            donation_path = output_dir / donation.SHAREABLE_DONATION_FILE
+            manifest_path = output_dir / donation.SHAREABLE_MANIFEST_FILE
+            review_path = output_dir / donation.REVIEW_FILE
+            record = {
+                "schema_version": donation.SCHEMA_VERSION,
+                "source": "codex",
+                "session_hash": "session",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": 'OPENAI_API_KEY="sk-demo1234567890abcdef" and git@github.com:user/repo.git',
                         "privacy_filter": {
                             "model": donation.PRIVACY_FILTER_MODEL,
                             "status": "filtered",

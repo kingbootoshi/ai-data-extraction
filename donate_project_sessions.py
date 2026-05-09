@@ -56,9 +56,15 @@ SECRET_PATTERNS = [
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bhf_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\b[A-Za-z0-9_]*API[_-]?KEY[A-Za-z0-9_]*\s*[:=]\s*['\"]?[^'\"\s,}]+['\"]?", re.IGNORECASE),
-    re.compile(r"\b[A-Za-z0-9_]*TOKEN[A-Za-z0-9_]*\s*[:=]\s*['\"]?[^'\"\s,}]+['\"]?", re.IGNORECASE),
+    re.compile(
+        r"['\"]?\b[A-Za-z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Za-z0-9_]*['\"]?\s*[:=]\s*['\"]?[^'\"\s,}]+['\"]?",
+        re.IGNORECASE,
+    ),
+    re.compile(r"['\"]?\b[A-Za-z0-9_]*(?:Key|KEY)['\"]?\s*[:=]\s*['\"]?[^'\"\s,}]+['\"]?"),
 ]
+GIT_REMOTE_PATTERN = re.compile(
+    r"\b(?:git@[\w.-]+:[^\s'\"),\]}]+|https://(?:github\.com|gitlab\.com|bitbucket\.org)/[^\s'\"),\]}]+)"
+)
 LOCAL_PATH_PATTERN = re.compile(r"(?<![\w<])/(?:Users|private|tmp|var|home)/[^\s'\"),:\]}]+")
 
 
@@ -507,6 +513,7 @@ class LocalMinimizer:
             "home_paths": 0,
             "absolute_paths": 0,
             "secret_patterns": 0,
+            "git_remotes": 0,
         }
         minimized = text
 
@@ -522,6 +529,9 @@ class LocalMinimizer:
 
         minimized, count = LOCAL_PATH_PATTERN.subn("<LOCAL_PATH>", minimized)
         counts["absolute_paths"] += count
+
+        minimized, count = GIT_REMOTE_PATTERN.subn("<GIT_REMOTE>", minimized)
+        counts["git_remotes"] += count
 
         for pattern in SECRET_PATTERNS:
             minimized, count = pattern.subn("<SECRET>", minimized)
@@ -1324,6 +1334,12 @@ def command_verify(args: argparse.Namespace) -> int:
             message_filter = message.get("privacy_filter", {})
             if message_filter.get("model") != PRIVACY_FILTER_MODEL or message_filter.get("status") != "filtered":
                 failures.append(f"record {index} message {message_index} is missing privacy filter metadata")
+            message_content = message.get("content")
+            if isinstance(message_content, str):
+                if GIT_REMOTE_PATTERN.search(message_content):
+                    failures.append(f"record {index} message {message_index} contains an unminimized git remote")
+                if any(pattern.search(message_content) for pattern in SECRET_PATTERNS):
+                    failures.append(f"record {index} message {message_index} contains an unminimized secret pattern")
 
     home_path = str(Path.home())
     for checked_path in (donation_path, manifest_path, review_path):
