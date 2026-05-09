@@ -41,6 +41,7 @@ DEFAULT_OPF_PRIVACY_FILTER_COMMAND = (
     "opf --device cpu --output-mode typed --format json --json-indent 0 --no-print-color-coded-text"
 )
 DEFAULT_OPENMED_MLX_MODEL = "OpenMed/privacy-filter-mlx-8bit"
+DEFAULT_PRIVACY_FILTER_BATCH_CHARACTERS = 120_000
 OPENMED_MLX_WRAPPER = Path(__file__).with_name("privacy_filter_openmed.py")
 DEFAULT_PRIVACY_FILTER_COMMAND = AUTO_PRIVACY_FILTER_COMMAND
 OPF_DEFAULT_ARGS = [
@@ -64,6 +65,10 @@ SECRET_PATTERNS = [
 ]
 GIT_REMOTE_PATTERN = re.compile(
     r"\b(?:git@[\w.-]+:[^\s'\"),\]}]+|https://(?:github\.com|gitlab\.com|bitbucket\.org)/[^\s'\"),\]}]+)"
+)
+EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+WRAPPED_LOCAL_PATH_PATTERN = re.compile(
+    r"(?<![\w<])/(?:Users|private|tmp|var|home)/\s*(?:[│|>]\s*)?[^\s'\"),:\]}]+(?:/[^\s'\"),:\]}]+)*"
 )
 LOCAL_PATH_PATTERN = re.compile(r"(?<![\w<])/(?:Users|private|tmp|var|home)/[^\s'\"),:\]}]+")
 
@@ -514,6 +519,7 @@ class LocalMinimizer:
             "absolute_paths": 0,
             "secret_patterns": 0,
             "git_remotes": 0,
+            "emails": 0,
         }
         minimized = text
 
@@ -527,11 +533,17 @@ class LocalMinimizer:
             minimized, count = re.subn(home_pattern + r"(?=/|[\s'\"),:\]}]|$)", "<HOME>", minimized)
             counts["home_paths"] += count
 
+        minimized, count = WRAPPED_LOCAL_PATH_PATTERN.subn("<LOCAL_PATH>", minimized)
+        counts["absolute_paths"] += count
+
         minimized, count = LOCAL_PATH_PATTERN.subn("<LOCAL_PATH>", minimized)
         counts["absolute_paths"] += count
 
         minimized, count = GIT_REMOTE_PATTERN.subn("<GIT_REMOTE>", minimized)
         counts["git_remotes"] += count
+
+        minimized, count = EMAIL_PATTERN.subn("<PRIVATE_EMAIL>", minimized)
+        counts["emails"] += count
 
         for pattern in SECRET_PATTERNS:
             minimized, count = pattern.subn("<SECRET>", minimized)
@@ -767,6 +779,155 @@ def sanitize_text(text: str, minimizer: LocalMinimizer, privacy_filter: PrivacyF
     )
 
 
+def privacy_filter_batch_characters() -> int:
+    raw_value = os.environ.get("DONATION_PRIVACY_FILTER_BATCH_CHARACTERS")
+    if not raw_value:
+        return DEFAULT_PRIVACY_FILTER_BATCH_CHARACTERS
+    try:
+        return max(1, int(raw_value))
+    except ValueError:
+        return DEFAULT_PRIVACY_FILTER_BATCH_CHARACTERS
+
+
+def make_field_delimiter(texts: list[str], batch_index: int) -> str:
+    suffix = stable_hash("\n".join(texts))[:12]
+    for attempt in range(100):
+        delimiter = f"\n<<<SESSION_DONATION_FIELD_BOUNDARY_{batch_index}_{attempt}_{suffix}>>>\n"
+        if all(delimiter not in text for text in texts):
+            return delimiter
+    raise PrivacyFilterError("unable to create a safe field delimiter for batched privacy filtering")
+
+
+def split_privacy_spans_by_field(
+    spans: list[dict[str, Any]],
+    offsets: dict[int, tuple[int, int]],
+) -> dict[int, list[dict[str, Any]]]:
+    by_field: dict[int, list[dict[str, Any]]] = {index: [] for index in offsets}
+    for span in spans:
+        try:
+            start = int(span["start"])
+            end = int(span["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        for index, (field_start, field_end) in offsets.items():
+            if field_start <= start and end <= field_end:
+                adjusted = dict(span)
+                adjusted["start"] = start - field_start
+                adjusted["end"] = end - field_start
+                by_field[index].append(adjusted)
+                break
+    return by_field
+
+
+def filter_text_batch(
+    batch: list[tuple[int, str]],
+    privacy_filter: PrivacyFilter,
+    batch_index: int,
+) -> dict[int, TextFilterResult]:
+    if not batch:
+        return {}
+
+    texts = [text for _, text in batch]
+    delimiter = make_field_delimiter(texts, batch_index)
+    combined_parts: list[str] = []
+    offsets: dict[int, tuple[int, int]] = {}
+    cursor = 0
+    for position, (index, text) in enumerate(batch):
+        start = cursor
+        combined_parts.append(text)
+        cursor += len(text)
+        offsets[index] = (start, cursor)
+        if position != len(batch) - 1:
+            combined_parts.append(delimiter)
+            cursor += len(delimiter)
+
+    filtered = privacy_filter.filter_text("".join(combined_parts))
+    redacted_parts = filtered.redacted_text.split(delimiter)
+    if len(redacted_parts) != len(batch):
+        return {
+            index: privacy_filter.filter_text(text)
+            for index, text in batch
+        }
+
+    spans_by_field = split_privacy_spans_by_field(filtered.spans, offsets)
+    results: dict[int, TextFilterResult] = {}
+    for (index, _), redacted in zip(batch, redacted_parts, strict=True):
+        spans = spans_by_field.get(index, [])
+        results[index] = TextFilterResult(
+            redacted_text=redacted,
+            spans=spans,
+            span_count=len(spans),
+            runner=filtered.runner,
+        )
+    return results
+
+
+def sanitize_texts(
+    texts: list[str],
+    minimizer: LocalMinimizer,
+    privacy_filter: PrivacyFilter,
+    batch_characters: int | None = None,
+) -> list[TextSanitizationResult]:
+    if not texts:
+        return []
+
+    max_batch_characters = batch_characters or privacy_filter_batch_characters()
+    minimized: list[str] = []
+    local_replacements: list[dict[str, int]] = []
+    for text in texts:
+        minimized_text, replacements = minimizer.apply(text)
+        minimized.append(minimized_text)
+        local_replacements.append(replacements)
+
+    results: list[TextSanitizationResult | None] = [None] * len(texts)
+    current_batch: list[tuple[int, str]] = []
+    current_characters = 0
+    batches: list[list[tuple[int, str]]] = []
+
+    def flush_batch() -> None:
+        nonlocal current_batch, current_characters
+        if current_batch:
+            batches.append(current_batch)
+        current_batch = []
+        current_characters = 0
+
+    for index, text in enumerate(minimized):
+        if not text:
+            results[index] = TextSanitizationResult(
+                text=text,
+                privacy_spans=[],
+                privacy_span_count=0,
+                local_replacements=local_replacements[index],
+                runner=privacy_filter.runner,
+            )
+            continue
+        separator_budget = 80 if current_batch else 0
+        projected = current_characters + len(text) + separator_budget
+        if current_batch and projected > max_batch_characters:
+            flush_batch()
+        current_batch.append((index, text))
+        current_characters += len(text) + (80 if len(current_batch) > 1 else 0)
+    flush_batch()
+
+    for batch_index, batch in enumerate(batches):
+        filtered_batch = filter_text_batch(batch, privacy_filter, batch_index)
+        for index, filtered in filtered_batch.items():
+            results[index] = TextSanitizationResult(
+                text=filtered.redacted_text,
+                privacy_spans=filtered.spans,
+                privacy_span_count=filtered.span_count,
+                local_replacements=local_replacements[index],
+                runner=filtered.runner,
+            )
+
+    completed: list[TextSanitizationResult] = []
+    for result in results:
+        if result is None:
+            raise PrivacyFilterError("batched privacy filtering did not produce a result for every text field")
+        completed.append(result)
+    return completed
+
+
 def candidate_hash(candidate: SessionCandidate) -> str:
     parsed_id = candidate.parsed.session_id if candidate.parsed else candidate.source_path.stem
     return stable_hash(f"{candidate.source}\n{canonical_path(candidate.source_path)}\n{parsed_id}")[:16]
@@ -791,10 +952,16 @@ def export_session(
         "home_paths": 0,
         "absolute_paths": 0,
         "secret_patterns": 0,
+        "git_remotes": 0,
+        "emails": 0,
     }
 
-    for message in parsed.messages:
-        sanitized = sanitize_text(message.content, minimizer, privacy_filter)
+    sanitized_messages = sanitize_texts(
+        [message.content for message in parsed.messages],
+        minimizer,
+        privacy_filter,
+    )
+    for message, sanitized in zip(parsed.messages, sanitized_messages, strict=True):
         total_spans += sanitized.privacy_span_count
         merge_counts(total_replacements, sanitized.local_replacements)
         messages.append(
@@ -814,8 +981,12 @@ def export_session(
 
     tool_events: list[dict[str, Any]] = []
     if include_tools:
-        for event in parsed.tool_events:
-            sanitized = sanitize_text(event.content, minimizer, privacy_filter)
+        sanitized_events = sanitize_texts(
+            [event.content for event in parsed.tool_events],
+            minimizer,
+            privacy_filter,
+        )
+        for event, sanitized in zip(parsed.tool_events, sanitized_events, strict=True):
             total_spans += sanitized.privacy_span_count
             merge_counts(total_replacements, sanitized.local_replacements)
             tool_events.append(
@@ -1338,6 +1509,8 @@ def command_verify(args: argparse.Namespace) -> int:
             if isinstance(message_content, str):
                 if GIT_REMOTE_PATTERN.search(message_content):
                     failures.append(f"record {index} message {message_index} contains an unminimized git remote")
+                if EMAIL_PATTERN.search(message_content):
+                    failures.append(f"record {index} message {message_index} contains an unminimized email")
                 if any(pattern.search(message_content) for pattern in SECRET_PATTERNS):
                     failures.append(f"record {index} message {message_index} contains an unminimized secret pattern")
 

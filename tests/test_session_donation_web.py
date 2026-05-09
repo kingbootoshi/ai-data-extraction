@@ -144,9 +144,10 @@ class SessionDonationWebTests(unittest.TestCase):
             self.assertIn("<PRIVATE_PERSON>", result["redacted_text"])
             self.assertIn("<PRIVATE_EMAIL>", result["redacted_text"])
             self.assertNotIn(str(project), result["redacted_text"])
-            self.assertEqual(result["span_count"], 2)
+            self.assertEqual(result["span_count"], 1)
             self.assertEqual(result["local_replacements"]["project_paths"], 1)
             self.assertEqual(result["local_replacements"]["secret_patterns"], 1)
+            self.assertEqual(result["local_replacements"]["emails"], 1)
 
     def test_package_selected_sessions_creates_zip_and_verifies_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

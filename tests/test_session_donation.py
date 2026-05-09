@@ -204,6 +204,58 @@ class SessionDonationTests(unittest.TestCase):
         self.assertNotIn("git@github.com", minimized)
         self.assertNotIn("https://github.com/user/repo.git", minimized)
 
+    def test_local_minimizer_redacts_wrapped_local_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            minimizer = donation.LocalMinimizer(Path(tmp))
+            text = (
+                "See /Users/\n"
+                "│ saint/Dev/ghostbox/src/api.ts and /tmp/\n"
+                "  │ ghost-server-claude.js from terminal output."
+            )
+
+            minimized, counts = minimizer.apply(text)
+
+        self.assertEqual(counts["absolute_paths"], 2)
+        self.assertNotIn("/Users/", minimized)
+        self.assertNotIn("/tmp/", minimized)
+        self.assertEqual(minimized.count("<LOCAL_PATH>"), 2)
+
+    def test_local_minimizer_redacts_emails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            minimizer = donation.LocalMinimizer(Path(tmp))
+            text = "Contact alice@example.com and bob.smith+test@sub.example.org."
+
+            minimized, counts = minimizer.apply(text)
+
+        self.assertEqual(counts["emails"], 2)
+        self.assertNotIn("alice@example.com", minimized)
+        self.assertNotIn("bob.smith+test@sub.example.org", minimized)
+        self.assertEqual(minimized.count("<PRIVATE_EMAIL>"), 2)
+
+    def test_sanitize_texts_batches_and_splits_message_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            minimizer = donation.LocalMinimizer(root)
+            privacy_filter = donation.PrivacyFilter(make_fake_privacy_filter(root))
+
+            results = donation.sanitize_texts(
+                [
+                    "Alice works on the first message.",
+                    "The second message uses alice@example.com.",
+                ],
+                minimizer,
+                privacy_filter,
+                batch_characters=10_000,
+            )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0].text, "<PRIVATE_PERSON> works on the first message.")
+        self.assertEqual(results[1].text, "The second message uses <PRIVATE_EMAIL>.")
+        self.assertEqual([span["label"] for span in results[0].privacy_spans], ["private_person"])
+        self.assertEqual(results[1].privacy_spans, [])
+        self.assertEqual(results[1].local_replacements["emails"], 1)
+        self.assertEqual(results[0].privacy_spans[0]["start"], 0)
+
     def test_codex_discovery_only_marks_project_scoped_sessions_eligible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -439,6 +491,43 @@ class SessionDonationTests(unittest.TestCase):
                     {
                         "role": "user",
                         "content": 'OPENAI_API_KEY="sk-demo1234567890abcdef" and git@github.com:user/repo.git',
+                        "privacy_filter": {
+                            "model": donation.PRIVACY_FILTER_MODEL,
+                            "status": "filtered",
+                        },
+                    }
+                ],
+                "privacy_filter": {
+                    "model": donation.PRIVACY_FILTER_MODEL,
+                    "status": "filtered",
+                },
+            }
+            donation_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            manifest = {
+                "counts": {"donated": 1},
+                "files": {"donation_sha256": donation.file_sha256(donation_path)},
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            review_path.write_text("review", encoding="utf-8")
+
+            verify_code = donation.command_verify(argparse.Namespace(output_dir=str(output_dir)))
+
+            self.assertEqual(verify_code, 1)
+
+    def test_verify_rejects_unminimized_emails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            donation_path = output_dir / donation.SHAREABLE_DONATION_FILE
+            manifest_path = output_dir / donation.SHAREABLE_MANIFEST_FILE
+            review_path = output_dir / donation.REVIEW_FILE
+            record = {
+                "schema_version": donation.SCHEMA_VERSION,
+                "source": "codex",
+                "session_hash": "session",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "email alice@example.com",
                         "privacy_filter": {
                             "model": donation.PRIVACY_FILTER_MODEL,
                             "status": "filtered",
