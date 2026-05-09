@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import donate_project_sessions as donation
+import privacy_filter_openmed as openmed_filter
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -131,6 +132,45 @@ class SessionDonationTests(unittest.TestCase):
             self.assertIn("--json-indent", argv)
             self.assertEqual(argv[argv.index("--json-indent") + 1], "0")
             self.assertIn("--no-print-color-coded-text", argv)
+
+    def test_auto_privacy_filter_prefers_openmed_mlx_on_apple_silicon(self) -> None:
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(donation, "is_apple_silicon", return_value=True),
+            patch.object(donation, "module_available", side_effect=lambda name: name in {"mlx", "openmed"}),
+        ):
+            privacy_filter = donation.PrivacyFilter("auto")
+
+        self.assertEqual(privacy_filter.runner, "openmed-mlx")
+        self.assertIn("privacy_filter_openmed.py", privacy_filter.command)
+        self.assertIn("OpenMed/privacy-filter-mlx-8bit", privacy_filter.command)
+
+    def test_auto_privacy_filter_falls_back_to_opf_when_mlx_is_unavailable(self) -> None:
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(donation, "is_apple_silicon", return_value=True),
+            patch.object(donation, "module_available", return_value=False),
+        ):
+            privacy_filter = donation.PrivacyFilter("auto")
+
+        self.assertEqual(privacy_filter.runner, "opf")
+        self.assertIn("--device cpu", privacy_filter.command)
+
+    def test_openmed_wrapper_redacts_normalized_spans(self) -> None:
+        text = "Alice Smith emailed alice@example.com with token abc."
+        spans = openmed_filter.normalize_entities(
+            [
+                {"entity_group": "private_person", "word": "Alice Smith", "start": 0, "end": 11, "score": 0.99},
+                {"entity_group": "private_email", "word": "alice@example.com", "start": 20, "end": 37, "score": 0.98},
+            ]
+        )
+
+        self.assertEqual(
+            openmed_filter.redact_text(text, spans),
+            "<PRIVATE_PERSON> emailed <PRIVATE_EMAIL> with token abc.",
+        )
+        self.assertEqual(spans[0]["placeholder"], "<PRIVATE_PERSON>")
+        self.assertNotIn("word", spans[0])
 
     def test_codex_discovery_only_marks_project_scoped_sessions_eligible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

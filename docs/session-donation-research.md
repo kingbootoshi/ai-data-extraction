@@ -50,7 +50,12 @@ OpenAI Privacy Filter is a Hugging Face token-classification model for privacy s
 - `private_date`
 - `secret`
 
-The exporter requires an OpenAI Privacy Filter compatible command before it writes donation data. By default it calls:
+The exporter requires an OpenAI Privacy Filter compatible command before it writes donation data. By default it uses `auto` backend resolution:
+
+- Apple Silicon with `openmed[mlx]` installed: run `privacy_filter_openmed.py` against `OpenMed/privacy-filter-mlx-8bit`.
+- Otherwise: run CPU `opf`.
+
+The CPU fallback command is:
 
 ```bash
 opf --device cpu --output-mode typed --format json --json-indent 0 --no-print-color-coded-text
@@ -61,6 +66,8 @@ The command must emit JSON with `redacted_text` and optional `detected_spans`, m
 Related sources:
 
 - Hugging Face model card: https://huggingface.co/openai/privacy-filter
+- OpenMed MLX Privacy Filter: https://huggingface.co/OpenMed/privacy-filter-mlx-8bit
+- MLX community conversion: https://huggingface.co/mlx-community/openai-privacy-filter-mxfp8
 - Privacy Filter repository: https://github.com/openai/privacy-filter
 - OPF output schema: https://github.com/openai/privacy-filter/blob/main/OUTPUT_SCHEMAS.md
 

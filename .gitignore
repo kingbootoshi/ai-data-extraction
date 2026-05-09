@@ -3,6 +3,7 @@ extracted_data/
 donation_exports/
 
 # Python cache
+.venv/
 __pycache__/
 *.pyc
 *.pyo

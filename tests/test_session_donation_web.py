@@ -121,6 +121,9 @@ class SessionDonationWebTests(unittest.TestCase):
         self.assertIn("Show sessions", web.HTML_PAGE)
         self.assertNotIn('>${expanded ? "-" : "+"}</button>', web.HTML_PAGE)
         self.assertIn("input.indeterminate", web.HTML_PAGE)
+        self.assertIn("state.selected.add(session.id)", web.HTML_PAGE)
+        self.assertIn("Select shown codebases", web.HTML_PAGE)
+        self.assertIn("Clear selection", web.HTML_PAGE)
         self.assertIn("for (const project of filteredProjects())", web.HTML_PAGE)
 
     def test_preview_filter_uses_local_minimizer_and_privacy_filter(self) -> None:

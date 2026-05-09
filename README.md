@@ -165,12 +165,37 @@ uv run python donate_project_sessions.py export --project /path/to/project --yes
 uv run python donate_project_sessions.py verify donation_exports/project_YYYYMMDD_HHMMSS
 ```
 
-If `opf` is not on your PATH, pass the venv command explicitly:
+The exporter defaults to `--privacy-filter-command auto`. On Apple Silicon, if
+`openmed[mlx]` and `mlx` are installed in the active Python environment, `auto`
+uses OpenMed's MLX build of OpenAI Privacy Filter:
+`OpenMed/privacy-filter-mlx-8bit`. Otherwise it falls back to CPU `opf`.
+
+For persistent Apple Silicon MLX setup:
+
+```bash
+uv venv
+uv pip install "openmed[mlx]"
+```
+
+The first MLX run downloads the model snapshot once from Hugging Face. After it
+is cached, inference runs locally on the Mac.
+
+If `opf` is not on your PATH, or you want to force a specific backend, pass the
+command explicitly:
 
 ```bash
 uv run python donate_project_sessions.py export \
   --project /path/to/project \
   --privacy-filter-command "/path/to/privacy-filter/.venv/bin/opf --device cpu --output-mode typed --format json --json-indent 0 --no-print-color-coded-text" \
+  --yes
+```
+
+To force the repo's OpenMed MLX wrapper:
+
+```bash
+uv run python donate_project_sessions.py export \
+  --project /path/to/project \
+  --privacy-filter-command "python privacy_filter_openmed.py --model OpenMed/privacy-filter-mlx-8bit" \
   --yes
 ```
 
@@ -201,7 +226,12 @@ PATH=/path/to/privacy-filter/.venv/bin:$PATH uv run python session_donation_web.
 ```
 
 You can also paste the full venv command into the UI's privacy filter command
-field.
+field. Leave the field as `auto` to prefer OpenMed MLX on Apple Silicon when
+available, then fall back to CPU `opf`.
+
+The UI starts with codebases collapsed and all eligible sessions selected so
+the selected donation total matches the available local total. Use "Clear
+selection" to choose a smaller subset.
 
 Open:
 

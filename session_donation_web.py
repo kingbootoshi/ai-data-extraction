@@ -957,7 +957,7 @@ HTML_PAGE = r"""<!doctype html>
           <input id="sources" type="text" value="codex,claude">
         </label>
         <label>Privacy filter command
-          <input id="filterCommand" type="text" value="opf --device cpu --output-mode typed --format json --json-indent 0 --no-print-color-coded-text">
+          <input id="filterCommand" type="text" value="auto">
         </label>
         <label class="checkline">
           <input id="includeTools" type="checkbox"> Include tool payloads
@@ -972,8 +972,8 @@ HTML_PAGE = r"""<!doctype html>
             <input id="search" type="search" placeholder="Filter codebases or session IDs">
           </div>
           <div class="right">
-            <button id="selectVisible">Select visible</button>
-            <button id="clearSelection">Clear</button>
+            <button id="selectVisible">Select shown codebases</button>
+            <button id="clearSelection">Clear selection</button>
           </div>
         </div>
         <div id="projectList" class="project-list">
@@ -1011,7 +1011,7 @@ HTML_PAGE = r"""<!doctype html>
 
         <section class="panel preview-panel">
           <strong>Privacy preview</strong>
-          <textarea id="previewInput" spellcheck="false">Alice shared OPENAI_API_KEY="sk-demo1234567890abcdef" from /Users/saint/Dev/ai-data-extraction/.env and alice@example.com.</textarea>
+          <textarea id="previewInput" spellcheck="false">Alice Smith shared OPENAI_API_KEY="sk-demo1234567890abcdef" from /Users/saint/Dev/ai-data-extraction/.env and alice.smith@example.com.</textarea>
           <button id="previewFilter">Run preview</button>
           <div id="previewOutput" class="preview-output" hidden></div>
         </section>
@@ -1077,6 +1077,7 @@ HTML_PAGE = r"""<!doctype html>
       for (const project of state.projects) {
         for (const session of project.sessions) {
           state.sessions.set(session.id, { ...session, projectId: project.id });
+          state.selected.add(session.id);
         }
       }
       renderProjects();

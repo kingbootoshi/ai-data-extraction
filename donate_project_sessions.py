@@ -14,8 +14,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import importlib.util
 import json
 import os
+import platform
 import re
 import shlex
 import shutil
@@ -34,9 +36,13 @@ DEFAULT_OUTPUT_ROOT = "donation_exports"
 SHAREABLE_DONATION_FILE = "donation.jsonl"
 SHAREABLE_MANIFEST_FILE = "manifest.json"
 REVIEW_FILE = "review.html"
-DEFAULT_PRIVACY_FILTER_COMMAND = (
+AUTO_PRIVACY_FILTER_COMMAND = "auto"
+DEFAULT_OPF_PRIVACY_FILTER_COMMAND = (
     "opf --device cpu --output-mode typed --format json --json-indent 0 --no-print-color-coded-text"
 )
+DEFAULT_OPENMED_MLX_MODEL = "OpenMed/privacy-filter-mlx-8bit"
+OPENMED_MLX_WRAPPER = Path(__file__).with_name("privacy_filter_openmed.py")
+DEFAULT_PRIVACY_FILTER_COMMAND = AUTO_PRIVACY_FILTER_COMMAND
 OPF_DEFAULT_ARGS = [
     ("--device", "cpu"),
     ("--output-mode", "typed"),
@@ -552,21 +558,67 @@ def normalize_opf_command_parts(parts: list[str]) -> list[str]:
     return normalized
 
 
+def module_available(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+
+def is_apple_silicon() -> bool:
+    return sys.platform == "darwin" and platform.machine() == "arm64"
+
+
+def openmed_mlx_available() -> bool:
+    return is_apple_silicon() and module_available("mlx") and module_available("openmed")
+
+
+def quote_command(parts: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+def openmed_mlx_command() -> str:
+    return quote_command(
+        [
+            sys.executable,
+            str(OPENMED_MLX_WRAPPER),
+            "--model",
+            os.environ.get("OPENMED_PRIVACY_FILTER_MODEL", DEFAULT_OPENMED_MLX_MODEL),
+        ]
+    )
+
+
+def resolve_privacy_filter_command(command: str | None = None) -> str:
+    requested = (command or DEFAULT_PRIVACY_FILTER_COMMAND).strip()
+    if not requested or requested == AUTO_PRIVACY_FILTER_COMMAND:
+        override = os.environ.get("DONATION_PRIVACY_FILTER_COMMAND", "").strip()
+        if override:
+            return override
+        if openmed_mlx_available():
+            return openmed_mlx_command()
+        return DEFAULT_OPF_PRIVACY_FILTER_COMMAND
+    return requested
+
+
 class PrivacyFilter:
     def __init__(self, command: str | None = None):
-        self.command = command or DEFAULT_PRIVACY_FILTER_COMMAND
+        self.command = resolve_privacy_filter_command(command)
         self.command_parts = shlex.split(self.command)
         if not self.command_parts:
             raise PrivacyFilterError("privacy filter command is empty")
         self.command_parts = normalize_opf_command_parts(self.command_parts)
+        self._openmed_mlx_filter: Any | None = None
 
     @property
     def runner(self) -> str:
+        if any(Path(part).name == OPENMED_MLX_WRAPPER.name for part in self.command_parts):
+            return "openmed-mlx"
         return Path(self.command_parts[0]).name
 
     @property
     def uses_opf_cli(self) -> bool:
         return self.runner == "opf"
+
+    @property
+    def uses_openmed_mlx(self) -> bool:
+        return self.runner == "openmed-mlx"
 
     def ensure_available(self) -> None:
         executable = self.command_parts[0]
@@ -580,6 +632,9 @@ class PrivacyFilter:
         self.ensure_available()
         if not text:
             return TextFilterResult(redacted_text=text, spans=[], span_count=0, runner=self.runner)
+
+        if self.uses_openmed_mlx and openmed_mlx_available():
+            return self.filter_text_openmed_mlx(text)
 
         input_text: str | None = text
         command_parts = self.command_parts
@@ -612,6 +667,27 @@ class PrivacyFilter:
         if not payloads:
             raise PrivacyFilterError("privacy filter produced no parseable JSON output")
 
+        return self.result_from_payloads(payloads)
+
+    def openmed_mlx_model_name(self) -> str:
+        if "--model" in self.command_parts:
+            model_index = self.command_parts.index("--model") + 1
+            if model_index < len(self.command_parts):
+                return self.command_parts[model_index]
+        return DEFAULT_OPENMED_MLX_MODEL
+
+    def filter_text_openmed_mlx(self, text: str) -> TextFilterResult:
+        try:
+            from privacy_filter_openmed import OpenMedMLXFilter
+        except ImportError as exc:
+            raise PrivacyFilterError('OpenMed MLX wrapper is unavailable.') from exc
+
+        if self._openmed_mlx_filter is None:
+            self._openmed_mlx_filter = OpenMedMLXFilter(self.openmed_mlx_model_name())
+        payload = self._openmed_mlx_filter.filter_text(text)
+        return self.result_from_payloads([payload])
+
+    def result_from_payloads(self, payloads: list[dict[str, Any]]) -> TextFilterResult:
         redacted_parts: list[str] = []
         spans: list[dict[str, Any]] = []
         for payload in payloads:
