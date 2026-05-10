@@ -232,6 +232,23 @@ class SessionDonationTests(unittest.TestCase):
         self.assertNotIn("bob.smith+test@sub.example.org", minimized)
         self.assertEqual(minimized.count("<PRIVATE_EMAIL>"), 2)
 
+    def test_local_minimizer_renames_sensitive_project_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            minimizer = donation.LocalMinimizer(Path(tmp), sensitive_project_aliases=["nimbus"])
+            text = (
+                "Nimbus, nimbus-creative, Nimbus OS, nimbus_ceo_hub, nimbus agency, "
+                "nimbusPlugin, supabase_db_nimbus-creative, and \\nnimbus-creative should be anonymized."
+            )
+
+            minimized, counts = minimizer.apply(text)
+            pattern = donation.compile_sensitive_project_pattern(["nimbus"])
+
+        self.assertEqual(counts["sensitive_project_names"], 8)
+        self.assertIsNotNone(pattern)
+        assert pattern is not None
+        self.assertNotRegex(minimized, pattern)
+        self.assertEqual(minimized.count("Project M"), 8)
+
     def test_sanitize_texts_batches_and_splits_message_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -548,6 +565,84 @@ class SessionDonationTests(unittest.TestCase):
             review_path.write_text("review", encoding="utf-8")
 
             verify_code = donation.command_verify(argparse.Namespace(output_dir=str(output_dir)))
+
+            self.assertEqual(verify_code, 1)
+
+    def test_verify_rejects_sensitive_project_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            donation_path = output_dir / donation.SHAREABLE_DONATION_FILE
+            manifest_path = output_dir / donation.SHAREABLE_MANIFEST_FILE
+            review_path = output_dir / donation.REVIEW_FILE
+            record = {
+                "schema_version": donation.SCHEMA_VERSION,
+                "source": "codex",
+                "session_hash": "session",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "This mentions Nimbus Creative.",
+                        "privacy_filter": {
+                            "model": donation.PRIVACY_FILTER_MODEL,
+                            "status": "filtered",
+                        },
+                    }
+                ],
+                "privacy_filter": {
+                    "model": donation.PRIVACY_FILTER_MODEL,
+                    "status": "filtered",
+                },
+            }
+            donation_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            manifest = {
+                "counts": {"donated": 1},
+                "files": {"donation_sha256": donation.file_sha256(donation_path)},
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            review_path.write_text("review", encoding="utf-8")
+
+            verify_code = donation.command_verify(
+                argparse.Namespace(output_dir=str(output_dir), sensitive_project_alias=["nimbus"])
+            )
+
+            self.assertEqual(verify_code, 1)
+
+    def test_verify_rejects_sensitive_project_names_in_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            donation_path = output_dir / donation.SHAREABLE_DONATION_FILE
+            manifest_path = output_dir / donation.SHAREABLE_MANIFEST_FILE
+            review_path = output_dir / donation.REVIEW_FILE
+            record = {
+                "schema_version": donation.SCHEMA_VERSION,
+                "source": "codex",
+                "session_hash": "session",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "This mentions Project M.",
+                        "privacy_filter": {
+                            "model": donation.PRIVACY_FILTER_MODEL,
+                            "status": "filtered",
+                        },
+                    }
+                ],
+                "privacy_filter": {
+                    "model": donation.PRIVACY_FILTER_MODEL,
+                    "status": "filtered",
+                },
+            }
+            donation_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            manifest = {
+                "counts": {"donated": 1},
+                "files": {"donation_sha256": donation.file_sha256(donation_path)},
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            review_path.write_text("This stale review mentions Nimbus Creative.", encoding="utf-8")
+
+            verify_code = donation.command_verify(
+                argparse.Namespace(output_dir=str(output_dir), sensitive_project_alias=["nimbus"])
+            )
 
             self.assertEqual(verify_code, 1)
 

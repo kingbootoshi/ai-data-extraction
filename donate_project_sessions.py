@@ -27,7 +27,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 
 SCHEMA_VERSION = 1
@@ -67,6 +67,9 @@ GIT_REMOTE_PATTERN = re.compile(
     r"\b(?:git@[\w.-]+:[^\s'\"),\]}]+|https://(?:github\.com|gitlab\.com|bitbucket\.org)/[^\s'\"),\]}]+)"
 )
 EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+SENSITIVE_PROJECT_ALIASES_ENV = "SESSION_DONATION_SENSITIVE_ALIASES"
+SENSITIVE_PROJECT_REPLACEMENT_ENV = "SESSION_DONATION_SENSITIVE_REPLACEMENT"
+DEFAULT_SENSITIVE_PROJECT_REPLACEMENT = "Project M"
 WRAPPED_LOCAL_PATH_PATTERN = re.compile(
     r"(?<![\w<])/(?:Users|private|tmp|var|home)/\s*(?:[│|>]\s*)?[^\s'\"),:\]}]+(?:/[^\s'\"),:\]}]+)*"
 )
@@ -449,6 +452,44 @@ def dedupe_paths(paths: Iterable[Path]) -> list[Path]:
     return result
 
 
+def parse_sensitive_project_aliases(values: str | Sequence[str] | None = None) -> list[str]:
+    if values is None:
+        raw_values = [os.environ.get(SENSITIVE_PROJECT_ALIASES_ENV, "")]
+    elif isinstance(values, str):
+        raw_values = [values]
+    else:
+        raw_values = list(values)
+
+    aliases: list[str] = []
+    for raw_value in raw_values:
+        for raw_alias in str(raw_value).split(","):
+            alias = raw_alias.strip()
+            if alias:
+                aliases.append(alias)
+    return dedupe_keep_order(aliases)
+
+
+def sensitive_project_replacement(value: str | None = None) -> str:
+    replacement = value or os.environ.get(SENSITIVE_PROJECT_REPLACEMENT_ENV) or DEFAULT_SENSITIVE_PROJECT_REPLACEMENT
+    return replacement.strip() or DEFAULT_SENSITIVE_PROJECT_REPLACEMENT
+
+
+def compile_sensitive_project_pattern(aliases: Sequence[str]) -> re.Pattern[str] | None:
+    parts: list[str] = []
+    for alias in sorted(parse_sensitive_project_aliases(aliases), key=len, reverse=True):
+        tokens = [token for token in re.split(r"[\s_-]+", alias) if token]
+        if not tokens:
+            continue
+        if len(tokens) == 1:
+            alias_pattern = re.escape(tokens[0]) + r"[\w-]*"
+        else:
+            alias_pattern = r"[\s_-]+".join(re.escape(token) for token in tokens)
+        parts.append(rf"(?:(?<![A-Za-z])|(?<=\\n)){alias_pattern}")
+    if not parts:
+        return None
+    return re.compile("|".join(parts), re.IGNORECASE)
+
+
 def discover_codex_session_files(installation: Path) -> list[Path]:
     sessions_dir = installation / "sessions"
     if not sessions_dir.exists():
@@ -506,11 +547,19 @@ def discover_candidates(project_root: Path, sources: set[str], include_tools: bo
 
 
 class LocalMinimizer:
-    def __init__(self, project_root: Path):
+    def __init__(
+        self,
+        project_root: Path,
+        sensitive_project_aliases: Sequence[str] | None = None,
+        sensitive_project_replacement_value: str | None = None,
+    ):
         self.project_root = canonical_path(project_root)
         self.home = canonical_path(Path.home())
         self.project_aliases = path_aliases(self.project_root)
         self.home_aliases = path_aliases(self.home)
+        self.sensitive_project_aliases = parse_sensitive_project_aliases(sensitive_project_aliases)
+        self.sensitive_project_pattern = compile_sensitive_project_pattern(self.sensitive_project_aliases)
+        self.sensitive_project_replacement = sensitive_project_replacement(sensitive_project_replacement_value)
 
     def apply(self, text: str) -> tuple[str, dict[str, int]]:
         counts = {
@@ -520,6 +569,7 @@ class LocalMinimizer:
             "secret_patterns": 0,
             "git_remotes": 0,
             "emails": 0,
+            "sensitive_project_names": 0,
         }
         minimized = text
 
@@ -544,6 +594,10 @@ class LocalMinimizer:
 
         minimized, count = EMAIL_PATTERN.subn("<PRIVATE_EMAIL>", minimized)
         counts["emails"] += count
+
+        if self.sensitive_project_pattern is not None:
+            minimized, count = self.sensitive_project_pattern.subn(self.sensitive_project_replacement, minimized)
+            counts["sensitive_project_names"] += count
 
         for pattern in SECRET_PATTERNS:
             minimized, count = pattern.subn("<SECRET>", minimized)
@@ -954,6 +1008,7 @@ def export_session(
         "secret_patterns": 0,
         "git_remotes": 0,
         "emails": 0,
+        "sensitive_project_names": 0,
     }
 
     sanitized_messages = sanitize_texts(
@@ -1041,6 +1096,8 @@ def export_donation(
     privacy_filter: PrivacyFilter,
     include_tools: bool,
     selected_hashes: set[str] | None = None,
+    sensitive_project_aliases: Sequence[str] | None = None,
+    sensitive_project_replacement_value: str | None = None,
 ) -> Path:
     eligible = [candidate for candidate in candidates if candidate.eligible and candidate.parsed]
     if selected_hashes is not None:
@@ -1053,7 +1110,13 @@ def export_donation(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     project_hash = stable_hash(str(project_root))
-    minimizer = LocalMinimizer(project_root)
+    aliases = parse_sensitive_project_aliases(sensitive_project_aliases)
+    replacement = sensitive_project_replacement(sensitive_project_replacement_value)
+    minimizer = LocalMinimizer(
+        project_root,
+        sensitive_project_aliases=aliases,
+        sensitive_project_replacement_value=replacement,
+    )
     records = [
         export_session(candidate, project_hash, minimizer, privacy_filter, include_tools)
         for candidate in eligible
@@ -1064,7 +1127,17 @@ def export_donation(
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
-    manifest = build_manifest(project_root, candidates, eligible, output_dir, donation_path, privacy_filter, include_tools)
+    manifest = build_manifest(
+        project_root,
+        candidates,
+        eligible,
+        output_dir,
+        donation_path,
+        privacy_filter,
+        include_tools,
+        sensitive_project_alias_count=len(aliases),
+        sensitive_project_replacement_value=replacement,
+    )
     manifest_path = output_dir / SHAREABLE_MANIFEST_FILE
     with manifest_path.open("w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2, sort_keys=True)
@@ -1084,6 +1157,8 @@ def build_manifest(
     donation_path: Path,
     privacy_filter: PrivacyFilter,
     include_tools: bool,
+    sensitive_project_alias_count: int = 0,
+    sensitive_project_replacement_value: str | None = None,
 ) -> dict[str, Any]:
     eligible = [candidate for candidate in candidates if candidate.eligible and candidate.parsed]
     excluded = [candidate for candidate in candidates if not candidate.eligible]
@@ -1103,6 +1178,8 @@ def build_manifest(
         },
         "options": {
             "include_tools": include_tools,
+            "sensitive_project_alias_count": sensitive_project_alias_count,
+            "sensitive_project_replacement": sensitive_project_replacement(sensitive_project_replacement_value),
         },
         "counts": {
             "candidates": len(candidates),
@@ -1443,6 +1520,8 @@ def command_export(args: argparse.Namespace) -> int:
         privacy_filter=privacy_filter,
         include_tools=args.include_tools,
         selected_hashes=selected_hashes,
+        sensitive_project_aliases=args.sensitive_project_alias,
+        sensitive_project_replacement_value=args.sensitive_project_replacement,
     )
 
     print()
@@ -1458,6 +1537,9 @@ def command_verify(args: argparse.Namespace) -> int:
     manifest_path = output_dir / SHAREABLE_MANIFEST_FILE
     donation_path = output_dir / SHAREABLE_DONATION_FILE
     review_path = output_dir / REVIEW_FILE
+    sensitive_project_pattern = compile_sensitive_project_pattern(
+        parse_sensitive_project_aliases(getattr(args, "sensitive_project_alias", None))
+    )
 
     failures: list[str] = []
     if not manifest_path.exists():
@@ -1511,6 +1593,8 @@ def command_verify(args: argparse.Namespace) -> int:
                     failures.append(f"record {index} message {message_index} contains an unminimized git remote")
                 if EMAIL_PATTERN.search(message_content):
                     failures.append(f"record {index} message {message_index} contains an unminimized email")
+                if sensitive_project_pattern is not None and sensitive_project_pattern.search(message_content):
+                    failures.append(f"record {index} message {message_index} contains an unminimized sensitive project name")
                 if any(pattern.search(message_content) for pattern in SECRET_PATTERNS):
                     failures.append(f"record {index} message {message_index} contains an unminimized secret pattern")
 
@@ -1521,6 +1605,13 @@ def command_verify(args: argparse.Namespace) -> int:
             failures.append(f"{checked_path.name} contains the user's home directory path")
         if LOCAL_PATH_PATTERN.search(checked_text):
             failures.append(f"{checked_path.name} contains an unminimized local filesystem path")
+        if checked_path == review_path:
+            if GIT_REMOTE_PATTERN.search(checked_text):
+                failures.append(f"{checked_path.name} contains an unminimized git remote")
+            if EMAIL_PATTERN.search(checked_text):
+                failures.append(f"{checked_path.name} contains an unminimized email")
+            if sensitive_project_pattern is not None and sensitive_project_pattern.search(checked_text):
+                failures.append(f"{checked_path.name} contains an unminimized sensitive project name")
 
     if failures:
         for failure in failures:
@@ -1550,12 +1641,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export_parser.add_argument("--include-tools", action="store_true", help="include filtered tool call/result payloads")
     export_parser.add_argument("--session", action="append", help="eligible session hash to include; repeatable")
+    export_parser.add_argument(
+        "--sensitive-project-alias",
+        action="append",
+        help=(
+            "project codename or alias to rewrite locally before export; repeatable or comma-separated. "
+            f"Can also be set with {SENSITIVE_PROJECT_ALIASES_ENV}."
+        ),
+    )
+    export_parser.add_argument(
+        "--sensitive-project-replacement",
+        default=None,
+        help=(
+            f"replacement for sensitive project aliases; defaults to {DEFAULT_SENSITIVE_PROJECT_REPLACEMENT!r} "
+            f"or {SENSITIVE_PROJECT_REPLACEMENT_ENV}."
+        ),
+    )
     export_parser.add_argument("--list", action="store_true", help="list eligible/excluded sessions without exporting")
     export_parser.add_argument("--yes", action="store_true", help="export all eligible sessions without an interactive prompt")
     export_parser.set_defaults(func=command_export)
 
     verify_parser = subparsers.add_parser("verify", help="verify an exported donation directory")
     verify_parser.add_argument("output_dir", help="directory containing donation.jsonl and manifest.json")
+    verify_parser.add_argument(
+        "--sensitive-project-alias",
+        action="append",
+        help=(
+            "project codename or alias that must not appear in donation content; repeatable or comma-separated. "
+            f"Can also be set with {SENSITIVE_PROJECT_ALIASES_ENV}."
+        ),
+    )
     verify_parser.set_defaults(func=command_verify)
 
     return parser
