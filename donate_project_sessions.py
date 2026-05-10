@@ -69,7 +69,7 @@ GIT_REMOTE_PATTERN = re.compile(
 EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 SENSITIVE_PROJECT_ALIASES_ENV = "SESSION_DONATION_SENSITIVE_ALIASES"
 SENSITIVE_PROJECT_REPLACEMENT_ENV = "SESSION_DONATION_SENSITIVE_REPLACEMENT"
-DEFAULT_SENSITIVE_PROJECT_REPLACEMENT = "Project M"
+DEFAULT_SENSITIVE_PROJECT_REPLACEMENT = "<PRIVATE_PROJECT>"
 WRAPPED_LOCAL_PATH_PATTERN = re.compile(
     r"(?<![\w<])/(?:Users|private|tmp|var|home)/\s*(?:[│|>]\s*)?[^\s'\"),:\]}]+(?:/[^\s'\"),:\]}]+)*"
 )
@@ -1645,7 +1645,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--sensitive-project-alias",
         action="append",
         help=(
-            "project codename or alias to rewrite locally before export; repeatable or comma-separated. "
+            "private project alias to rewrite locally before export; repeatable or comma-separated. "
             f"Can also be set with {SENSITIVE_PROJECT_ALIASES_ENV}."
         ),
     )
@@ -1667,7 +1667,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--sensitive-project-alias",
         action="append",
         help=(
-            "project codename or alias that must not appear in donation content; repeatable or comma-separated. "
+            "private project alias that must not appear in donation content; repeatable or comma-separated. "
             f"Can also be set with {SENSITIVE_PROJECT_ALIASES_ENV}."
         ),
     )

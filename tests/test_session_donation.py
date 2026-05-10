@@ -247,7 +247,7 @@ class SessionDonationTests(unittest.TestCase):
         self.assertIsNotNone(pattern)
         assert pattern is not None
         self.assertNotRegex(minimized, pattern)
-        self.assertEqual(minimized.count("Project M"), 8)
+        self.assertEqual(minimized.count("<PRIVATE_PROJECT>"), 8)
 
     def test_sanitize_texts_batches_and_splits_message_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -620,7 +620,7 @@ class SessionDonationTests(unittest.TestCase):
                 "messages": [
                     {
                         "role": "user",
-                        "content": "This mentions Project M.",
+                        "content": "This mentions <PRIVATE_PROJECT>.",
                         "privacy_filter": {
                             "model": donation.PRIVACY_FILTER_MODEL,
                             "status": "filtered",
